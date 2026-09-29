@@ -1,0 +1,18 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# evolved compiler state & generated artifacts (regenerable via demos)
+compiler_state.json
+*_state.json
+*_best.cpp
+
+# tooling
+.pytest_cache/
+.coverage
+htmlcov/
+.vscode/
+.idea/
