@@ -148,17 +148,24 @@ class AscendCCodeGen:
                 self.w(f"constexpr auto {eid} = {he};")
         if seen:
             self.w()
-        # derived buffer init
+        # derived buffer init: one TPipe per program; one TBuf per staged slot.
+        # Cube operand views lower to L1 staging (A1/A2 -> L0A/L0B), NOT UB:
+        # on the cube path operands live in the L0 tier, the accumulator in
+        # L0C; vector/epilogue views live in UB (VECCALC).
+        mm_a, mm_b = _matmul_operand_views(prog)
+        self.w("TPipe pipe;")
         for view in prog.ub_views:
             bytes_ = view.slot_bytes
             bufnum = view.stages
+            position = "A1" if view.name in mm_a else \
+                "A2" if view.name in mm_b else "VECCALC"
             self.comment(f"view '{view.name}': offset {view.offset} B, "
-                         f"{view.shape} x {view.dtype}, bufferNum={bufnum}")
+                         f"{view.shape} x {view.dtype}, bufferNum={bufnum}, "
+                         f"position={position}")
             for s in range(view.stages):
-                self.w(f"TPipe pipe_{view.name}_{s};")
-                self.w(f"TBuf<TPosition::VECCALC> {self._local(view, s)};")
-                self.w(f"pipe_{view.name}_{s}.InitBuffer("
-                       f"{self._local(view, s)}, {bytes_});")
+                local = self._local(view, s)
+                self.w(f"TBuf<TPosition::{position}> {local};")
+                self.w(f"pipe.InitBuffer({local}, {bytes_});")
         for r in prog.l0c_regions:
             self.w(f"TCubeTBuf<TPosition::A1A2C1C2> l0c_{r.name}; "
                    f"/* {r.shape} fp32 accumulator, L0C */")
@@ -216,22 +223,35 @@ class AscendCCodeGen:
     def _view_local(self, op_view, stage_attr):
         return self._local(op_view, getattr(op, stage_attr))
 
+    @staticmethod
+    def _linear_offset(gm_off, param_shape) -> int:
+        """Concrete row-major element offset: sum(off[d] * stride[d]).
+
+        Both operands are literal ints at trace time, so the emitted address
+        is exact and process-independent (deterministic by construction).
+        """
+        strides = [1] * len(param_shape)
+        for d in range(len(param_shape) - 2, -1, -1):
+            strides[d] = strides[d + 1] * param_shape[d + 1]
+        return sum(off * st for off, st in zip(gm_off, strides))
+
     def _emit_gm2ub(self, op: Gm2Ub):
         dst = self._local(op.dst, op.stage)
         off = ", ".join(str(o) for o in op.gm_off)
         n = shape_numel(op.dst.shape)
+        lin = self._linear_offset(op.gm_off, op.src.shape)
         self.comment(f"gm2ub {op.src.name}[{off}] -> {op.dst.name}[{op.stage}] "
                      f"({op.dst.shape})")
         self.w(f"DataCopy({dst}.template GetTensor<{_ASCENDC_TYPE[op.dst.dtype]}>(), "
-               f"{op.src.name} + _offset_{op.src.name}_{abs(hash((op.src.name, op.gm_off))) % 9973}, "
-               f"{n});")
+               f"{op.src.name} + {lin}, {n});")
 
     def _emit_ub2gm(self, op: Ub2Gm):
         src = self._local(op.src, op.stage)
         off = ", ".join(str(o) for o in op.gm_off)
         n = shape_numel(op.src.shape)
+        lin = self._linear_offset(op.gm_off, op.dst.shape)
         self.comment(f"ub2gm {op.src.name}[{op.stage}] -> {op.dst.name}[{off}]")
-        self.w(f"DataCopy({op.dst.name} + _offset_{op.dst.name}_{abs(hash((op.dst.name, op.gm_off))) % 9973}, "
+        self.w(f"DataCopy({op.dst.name} + {lin}, "
                f"{src}.template GetTensor<{_ASCENDC_TYPE[op.src.dtype]}>(), {n});")
 
     def _emit_l0c2ub(self, op: L0c2Ub):
@@ -328,6 +348,21 @@ _V_BINARY = {"add": "BinaryOp::ADD", "sub": "BinaryOp::SUB", "mul": "BinaryOp::M
 _V_UNARY = {"neg": "UnaryOp::NEG", "abs": "UnaryOp::ABS", "sqrt": "UnaryOp::SQRT",
             "exp": "UnaryOp::EXP", "copy": "UnaryOp::MOV"}
 _V_REDUCE = {"sum": "ReduceOp::SUM", "min": "ReduceOp::MIN", "max": "ReduceOp::MAX"}
+
+
+def _matmul_operand_views(prog: Program):
+    """Views consumed as matmul A/B operands: (a-view names, b-view names).
+
+    The IR keeps operands in UB views; on the cube path lowering stages them
+    through L1 (A1/A2) into L0A/L0B, so their buffers take cube positions
+    instead of VECCALC (UB).
+    """
+    a_names, b_names = set(), set()
+    for op in prog.ops:
+        if isinstance(op, Matmul):
+            a_names.add(op.a.name)
+            b_names.add(op.b.name)
+    return a_names, b_names
 
 
 def _vop(op):

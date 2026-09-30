@@ -41,9 +41,6 @@ def _kern(shape, p):
         T, S = p.tile, p.stages
         ub = m.ub_pool("ub", 232 * 1024)
 
-        def nxt(b):
-            return b  # offsets assigned below via cumulative layout
-
         # concrete UB layout (agent-authored commitments, checker-verified)
         off = 0
         def align32(x):

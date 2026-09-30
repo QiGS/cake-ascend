@@ -30,7 +30,10 @@ class Arch:
     alignment_bytes: int = 32          # DataCopy alignment contract
     max_buffer_num: int = 4            # modeled queue/bufferNum depth limit
     cube_align: int = 16               # matmul M/N/K multiple (bf16/fp16)
-    calibrated: bool = True            # B200-analog: only some SKUs calibrated
+    # True only when cost anchors were *measured on real hardware*; modeling
+    # defaults from public figures do not count (see coverage labels in
+    # costmodel: the model never claims hardware anchoring it does not have).
+    calibrated: bool = False
     supports: frozenset = frozenset({BF16 := "bf16", "fp16", "fp32", "int32"})
     notes: tuple = field(default=())
 
@@ -53,10 +56,12 @@ ASCEND_910B = Arch(
     clock_mhz=1800,
     num_aic_per_core_group=1,
     num_aiv_per_core_group=7,
-    calibrated=True,
+    calibrated=False,   # modeling defaults, NOT hardware-measured anchors
     notes=(
         "Modeling defaults from public 910B-class figures; per-core shares "
-        "of HBM bandwidth are approximate. Re-anchor via calibration.",
+        "of HBM bandwidth are approximate. Not hardware-calibrated: re-anchor "
+        "on a real device (costmodel calibration) before trusting absolute "
+        "numbers.",
     ),
 )
 

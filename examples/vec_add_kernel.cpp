@@ -22,53 +22,49 @@ extern "C" __global__ __aicore__ void vec_add_manual(
         constexpr auto EVT_Z_RDY_0 = HardEvent::V_MTE3;
         constexpr auto EVT_Z_FREE_0 = HardEvent::MTE3_V;
 
-        // view 'X': offset 0 B, (1024,) x bf16, bufferNum=2
-        TPipe pipe_X_0;
+        TPipe pipe;
+        // view 'X': offset 0 B, (1024,) x bf16, bufferNum=2, position=VECCALC
         TBuf<TPosition::VECCALC> buf_X_0;
-        pipe_X_0.InitBuffer(buf_X_0, 2048);
-        TPipe pipe_X_1;
+        pipe.InitBuffer(buf_X_0, 2048);
         TBuf<TPosition::VECCALC> buf_X_1;
-        pipe_X_1.InitBuffer(buf_X_1, 2048);
-        // view 'Y': offset 4096 B, (1024,) x bf16, bufferNum=2
-        TPipe pipe_Y_0;
+        pipe.InitBuffer(buf_X_1, 2048);
+        // view 'Y': offset 4096 B, (1024,) x bf16, bufferNum=2, position=VECCALC
         TBuf<TPosition::VECCALC> buf_Y_0;
-        pipe_Y_0.InitBuffer(buf_Y_0, 2048);
-        TPipe pipe_Y_1;
+        pipe.InitBuffer(buf_Y_0, 2048);
         TBuf<TPosition::VECCALC> buf_Y_1;
-        pipe_Y_1.InitBuffer(buf_Y_1, 2048);
-        // view 'Z': offset 8192 B, (1024,) x bf16, bufferNum=1
-        TPipe pipe_Z_0;
+        pipe.InitBuffer(buf_Y_1, 2048);
+        // view 'Z': offset 8192 B, (1024,) x bf16, bufferNum=1, position=VECCALC
         TBuf<TPosition::VECCALC> buf_Z_0;
-        pipe_Z_0.InitBuffer(buf_Z_0, 2048);
+        pipe.InitBuffer(buf_Z_0, 2048);
 
         for (int t = 0; t < 4; ++t) {
             // gm2ub X[0] -> X[0] ((1024,))
-            DataCopy(buf_X_0.template GetTensor<__bf16>(), X + _offset_X_3497, 1024);
+            DataCopy(buf_X_0.template GetTensor<__bf16>(), X + 0, 1024);
             SetFlag<EVT_X_RDY_0>();  /* commit 'x_rdy' stage 0 */
             // gm2ub Y[0] -> Y[0] ((1024,))
-            DataCopy(buf_Y_0.template GetTensor<__bf16>(), Y + _offset_Y_3254, 1024);
+            DataCopy(buf_Y_0.template GetTensor<__bf16>(), Y + 0, 1024);
             SetFlag<EVT_Y_RDY_0>();  /* commit 'y_rdy' stage 0 */
             // gm2ub X[1024] -> X[1] ((1024,))
-            DataCopy(buf_X_1.template GetTensor<__bf16>(), X + _offset_X_4662, 1024);
+            DataCopy(buf_X_1.template GetTensor<__bf16>(), X + 1024, 1024);
             SetFlag<EVT_X_RDY_1>();  /* commit 'x_rdy' stage 1 */
             // gm2ub Y[1024] -> Y[1] ((1024,))
-            DataCopy(buf_Y_1.template GetTensor<__bf16>(), Y + _offset_Y_2089, 1024);
+            DataCopy(buf_Y_1.template GetTensor<__bf16>(), Y + 1024, 1024);
             SetFlag<EVT_Y_RDY_1>();  /* commit 'y_rdy' stage 1 */
             WaitFlag<EVT_X_FREE_0>();  /* wait 'x_free' stage 0 */
             WaitFlag<EVT_Y_FREE_0>();  /* wait 'y_free' stage 0 */
             // gm2ub X[2048] -> X[0] ((1024,))
-            DataCopy(buf_X_0.template GetTensor<__bf16>(), X + _offset_X_5461, 1024);
+            DataCopy(buf_X_0.template GetTensor<__bf16>(), X + 2048, 1024);
             SetFlag<EVT_X_RDY_0>();  /* commit 'x_rdy' stage 0 */
             // gm2ub Y[2048] -> Y[0] ((1024,))
-            DataCopy(buf_Y_0.template GetTensor<__bf16>(), Y + _offset_Y_5774, 1024);
+            DataCopy(buf_Y_0.template GetTensor<__bf16>(), Y + 2048, 1024);
             SetFlag<EVT_Y_RDY_0>();  /* commit 'y_rdy' stage 0 */
             WaitFlag<EVT_X_FREE_1>();  /* wait 'x_free' stage 1 */
             WaitFlag<EVT_Y_FREE_1>();  /* wait 'y_free' stage 1 */
             // gm2ub X[3072] -> X[1] ((1024,))
-            DataCopy(buf_X_1.template GetTensor<__bf16>(), X + _offset_X_1004, 1024);
+            DataCopy(buf_X_1.template GetTensor<__bf16>(), X + 3072, 1024);
             SetFlag<EVT_X_RDY_1>();  /* commit 'x_rdy' stage 1 */
             // gm2ub Y[3072] -> Y[1] ((1024,))
-            DataCopy(buf_Y_1.template GetTensor<__bf16>(), Y + _offset_Y_9919, 1024);
+            DataCopy(buf_Y_1.template GetTensor<__bf16>(), Y + 3072, 1024);
             SetFlag<EVT_Y_RDY_1>();  /* commit 'y_rdy' stage 1 */
         }
         for (int t = 0; t < 4; ++t) {
@@ -107,19 +103,19 @@ extern "C" __global__ __aicore__ void vec_add_manual(
         for (int t = 0; t < 4; ++t) {
             WaitFlag<EVT_Z_RDY_0>();  /* wait 'z_rdy' stage 0 */
             // ub2gm Z[0] -> Z[0]
-            DataCopy(Z + _offset_Z_3802, buf_Z_0.template GetTensor<__bf16>(), 1024);
+            DataCopy(Z + 0, buf_Z_0.template GetTensor<__bf16>(), 1024);
             SetFlag<EVT_Z_FREE_0>();  /* commit 'z_free' stage 0 */
             WaitFlag<EVT_Z_RDY_0>();  /* wait 'z_rdy' stage 0 */
             // ub2gm Z[0] -> Z[1024]
-            DataCopy(Z + _offset_Z_9548, buf_Z_0.template GetTensor<__bf16>(), 1024);
+            DataCopy(Z + 1024, buf_Z_0.template GetTensor<__bf16>(), 1024);
             SetFlag<EVT_Z_FREE_0>();  /* commit 'z_free' stage 0 */
             WaitFlag<EVT_Z_RDY_0>();  /* wait 'z_rdy' stage 0 */
             // ub2gm Z[0] -> Z[2048]
-            DataCopy(Z + _offset_Z_5226, buf_Z_0.template GetTensor<__bf16>(), 1024);
+            DataCopy(Z + 2048, buf_Z_0.template GetTensor<__bf16>(), 1024);
             SetFlag<EVT_Z_FREE_0>();  /* commit 'z_free' stage 0 */
             WaitFlag<EVT_Z_RDY_0>();  /* wait 'z_rdy' stage 0 */
             // ub2gm Z[0] -> Z[3072]
-            DataCopy(Z + _offset_Z_1718, buf_Z_0.template GetTensor<__bf16>(), 1024);
+            DataCopy(Z + 3072, buf_Z_0.template GetTensor<__bf16>(), 1024);
             SetFlag<EVT_Z_FREE_0>();  /* commit 'z_free' stage 0 */
         }
     }
@@ -136,53 +132,49 @@ extern "C" __global__ __aicore__ void vec_add_manual(
         constexpr auto EVT_Z_RDY_0 = HardEvent::V_MTE3;
         constexpr auto EVT_Z_FREE_0 = HardEvent::MTE3_V;
 
-        // view 'X': offset 0 B, (1024,) x bf16, bufferNum=2
-        TPipe pipe_X_0;
+        TPipe pipe;
+        // view 'X': offset 0 B, (1024,) x bf16, bufferNum=2, position=VECCALC
         TBuf<TPosition::VECCALC> buf_X_0;
-        pipe_X_0.InitBuffer(buf_X_0, 2048);
-        TPipe pipe_X_1;
+        pipe.InitBuffer(buf_X_0, 2048);
         TBuf<TPosition::VECCALC> buf_X_1;
-        pipe_X_1.InitBuffer(buf_X_1, 2048);
-        // view 'Y': offset 4096 B, (1024,) x bf16, bufferNum=2
-        TPipe pipe_Y_0;
+        pipe.InitBuffer(buf_X_1, 2048);
+        // view 'Y': offset 4096 B, (1024,) x bf16, bufferNum=2, position=VECCALC
         TBuf<TPosition::VECCALC> buf_Y_0;
-        pipe_Y_0.InitBuffer(buf_Y_0, 2048);
-        TPipe pipe_Y_1;
+        pipe.InitBuffer(buf_Y_0, 2048);
         TBuf<TPosition::VECCALC> buf_Y_1;
-        pipe_Y_1.InitBuffer(buf_Y_1, 2048);
-        // view 'Z': offset 8192 B, (1024,) x bf16, bufferNum=1
-        TPipe pipe_Z_0;
+        pipe.InitBuffer(buf_Y_1, 2048);
+        // view 'Z': offset 8192 B, (1024,) x bf16, bufferNum=1, position=VECCALC
         TBuf<TPosition::VECCALC> buf_Z_0;
-        pipe_Z_0.InitBuffer(buf_Z_0, 2048);
+        pipe.InitBuffer(buf_Z_0, 2048);
 
         for (int t = 0; t < 4; ++t) {
             // gm2ub X[4096] -> X[0] ((1024,))
-            DataCopy(buf_X_0.template GetTensor<__bf16>(), X + _offset_X_4716, 1024);
+            DataCopy(buf_X_0.template GetTensor<__bf16>(), X + 4096, 1024);
             SetFlag<EVT_X_RDY_0>();  /* commit 'x_rdy' stage 0 */
             // gm2ub Y[4096] -> Y[0] ((1024,))
-            DataCopy(buf_Y_0.template GetTensor<__bf16>(), Y + _offset_Y_3454, 1024);
+            DataCopy(buf_Y_0.template GetTensor<__bf16>(), Y + 4096, 1024);
             SetFlag<EVT_Y_RDY_0>();  /* commit 'y_rdy' stage 0 */
             // gm2ub X[5120] -> X[1] ((1024,))
-            DataCopy(buf_X_1.template GetTensor<__bf16>(), X + _offset_X_6636, 1024);
+            DataCopy(buf_X_1.template GetTensor<__bf16>(), X + 5120, 1024);
             SetFlag<EVT_X_RDY_1>();  /* commit 'x_rdy' stage 1 */
             // gm2ub Y[5120] -> Y[1] ((1024,))
-            DataCopy(buf_Y_1.template GetTensor<__bf16>(), Y + _offset_Y_5374, 1024);
+            DataCopy(buf_Y_1.template GetTensor<__bf16>(), Y + 5120, 1024);
             SetFlag<EVT_Y_RDY_1>();  /* commit 'y_rdy' stage 1 */
             WaitFlag<EVT_X_FREE_0>();  /* wait 'x_free' stage 0 */
             WaitFlag<EVT_Y_FREE_0>();  /* wait 'y_free' stage 0 */
             // gm2ub X[6144] -> X[0] ((1024,))
-            DataCopy(buf_X_0.template GetTensor<__bf16>(), X + _offset_X_2542, 1024);
+            DataCopy(buf_X_0.template GetTensor<__bf16>(), X + 6144, 1024);
             SetFlag<EVT_X_RDY_0>();  /* commit 'x_rdy' stage 0 */
             // gm2ub Y[6144] -> Y[0] ((1024,))
-            DataCopy(buf_Y_0.template GetTensor<__bf16>(), Y + _offset_Y_4209, 1024);
+            DataCopy(buf_Y_0.template GetTensor<__bf16>(), Y + 6144, 1024);
             SetFlag<EVT_Y_RDY_0>();  /* commit 'y_rdy' stage 0 */
             WaitFlag<EVT_X_FREE_1>();  /* wait 'x_free' stage 1 */
             WaitFlag<EVT_Y_FREE_1>();  /* wait 'y_free' stage 1 */
             // gm2ub X[7168] -> X[1] ((1024,))
-            DataCopy(buf_X_1.template GetTensor<__bf16>(), X + _offset_X_8979, 1024);
+            DataCopy(buf_X_1.template GetTensor<__bf16>(), X + 7168, 1024);
             SetFlag<EVT_X_RDY_1>();  /* commit 'x_rdy' stage 1 */
             // gm2ub Y[7168] -> Y[1] ((1024,))
-            DataCopy(buf_Y_1.template GetTensor<__bf16>(), Y + _offset_Y_8057, 1024);
+            DataCopy(buf_Y_1.template GetTensor<__bf16>(), Y + 7168, 1024);
             SetFlag<EVT_Y_RDY_1>();  /* commit 'y_rdy' stage 1 */
         }
         for (int t = 0; t < 4; ++t) {
@@ -221,19 +213,19 @@ extern "C" __global__ __aicore__ void vec_add_manual(
         for (int t = 0; t < 4; ++t) {
             WaitFlag<EVT_Z_RDY_0>();  /* wait 'z_rdy' stage 0 */
             // ub2gm Z[0] -> Z[4096]
-            DataCopy(Z + _offset_Z_4002, buf_Z_0.template GetTensor<__bf16>(), 1024);
+            DataCopy(Z + 4096, buf_Z_0.template GetTensor<__bf16>(), 1024);
             SetFlag<EVT_Z_FREE_0>();  /* commit 'z_free' stage 0 */
             WaitFlag<EVT_Z_RDY_0>();  /* wait 'z_rdy' stage 0 */
             // ub2gm Z[0] -> Z[5120]
-            DataCopy(Z + _offset_Z_5922, buf_Z_0.template GetTensor<__bf16>(), 1024);
+            DataCopy(Z + 5120, buf_Z_0.template GetTensor<__bf16>(), 1024);
             SetFlag<EVT_Z_FREE_0>();  /* commit 'z_free' stage 0 */
             WaitFlag<EVT_Z_RDY_0>();  /* wait 'z_rdy' stage 0 */
             // ub2gm Z[0] -> Z[6144]
-            DataCopy(Z + _offset_Z_4757, buf_Z_0.template GetTensor<__bf16>(), 1024);
+            DataCopy(Z + 6144, buf_Z_0.template GetTensor<__bf16>(), 1024);
             SetFlag<EVT_Z_FREE_0>();  /* commit 'z_free' stage 0 */
             WaitFlag<EVT_Z_RDY_0>();  /* wait 'z_rdy' stage 0 */
             // ub2gm Z[0] -> Z[7168]
-            DataCopy(Z + _offset_Z_1708, buf_Z_0.template GetTensor<__bf16>(), 1024);
+            DataCopy(Z + 7168, buf_Z_0.template GetTensor<__bf16>(), 1024);
             SetFlag<EVT_Z_FREE_0>();  /* commit 'z_free' stage 0 */
         }
     }

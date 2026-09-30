@@ -202,6 +202,9 @@ class CoreInterpreter:
         self.executed = set()
         self.busy = {}
 
+        # cross-core GM write accounting: (param, start, end) element ranges
+        self.gm_writes = []
+
         self._prepare()
 
     # ------------------------------------------------------------ prepare
@@ -490,6 +493,17 @@ class CoreInterpreter:
                       region=op.locate(),
                       hint="shrink the tile or fix the per-core partition arithmetic")
             return
+        # record written element ranges for cross-core aliasing analysis
+        strides = _strides(dst_shape)
+        shape, off = op.src.shape, op.gm_off
+        if len(shape) == 2:
+            base = off[0] * strides[0] + off[1] * strides[1]
+            for i in range(shape[0]):
+                start = base + i * strides[0]
+                self.gm_writes.append((op.dst.name, start, start + shape[1]))
+        else:
+            start = off[0] * strides[0]
+            self.gm_writes.append((op.dst.name, start, start + shape_numel(shape)))
         if self._copy_unaligned(op.src.shape, op.gm_off, op.src.dtype):
             self._dyn("copy_unaligned",
                       f"DataCopy {op.src.name}->{op.dst.name} violates "
@@ -706,7 +720,8 @@ def run_simulation(programs, arch: Arch, inputs: dict, input_shapes: dict,
     busy_total = {}
     exec_count = 0
     fatal = False
-    for prog in programs:
+    per_core_writes = []            # (core_idx, [(param, start, end), ...])
+    for core, prog in enumerate(programs):
         interp = CoreInterpreter(prog, arch, gm, input_shapes, execute_values=execute_values)
         try:
             core_span = interp.run()
@@ -714,6 +729,7 @@ def run_simulation(programs, arch: Arch, inputs: dict, input_shapes: dict,
             findings.extend(e.findings)
             fatal = True
             span_dead = True
+            per_core_writes.append((core, list(interp.gm_writes)))
             continue
         findings.extend(interp.findings)
         if any(f.meta.get("fatal", True) for f in interp.findings):
@@ -722,9 +738,13 @@ def run_simulation(programs, arch: Arch, inputs: dict, input_shapes: dict,
             span_dead = True
         else:
             span = max(span, core_span)
+        per_core_writes.append((core, list(interp.gm_writes)))
         for k, v in interp.busy.items():
             busy_total[k] = busy_total.get(k, 0.0) + v
         exec_count += len(interp.exec_log)
+    findings.extend(_cross_core_overlaps(per_core_writes))
+    if any(f.meta.get("fatal", True) for f in findings):
+        fatal = True
     if not programs:
         return SimResult(ok=not fatal, findings=findings, outputs=gm,
                          span_cycles=None, per_role_busy=busy_total)
@@ -732,3 +752,36 @@ def run_simulation(programs, arch: Arch, inputs: dict, input_shapes: dict,
     return SimResult(ok=not fatal, findings=findings, outputs=gm,
                      span_cycles=None if span_dead else span + launch,
                      per_role_busy=busy_total, exec_count=exec_count)
+
+
+def _cross_core_overlaps(per_core_writes) -> list:
+    """Detect two cores writing overlapping GM ranges (write-write aliasing).
+
+    Per-core execution is sequential, so same-core ordering is well defined;
+    across cores an overlap is a genuine race (last writer wins silently).
+    """
+    out = []
+    reported = set()
+    for i in range(len(per_core_writes)):
+        for j in range(i + 1, len(per_core_writes)):
+            ci, wi = per_core_writes[i]
+            cj, wj = per_core_writes[j]
+            for (pi, si, ei) in wi:
+                for (pj, sj, ej) in wj:
+                    if pi != pj or si >= ej or sj >= ei:
+                        continue
+                    key = (pi, max(si, sj), min(ei, ej))
+                    if key in reported:
+                        continue
+                    reported.add(key)
+                    out.append(Finding(
+                        category="program_safety", severity=DYN,
+                        code="SAFETY.gm_write_overlap",
+                        message=(f"cores {ci} and {cj} both write {pj} elements "
+                                 f"[{max(si, sj)}, {min(ei, ej)}) — cross-core "
+                                 f"write overlap (last writer wins)"),
+                        region=f"param:{pj}",
+                        hint="partition the output across cores disjointly "
+                             "(per-core tile ranges must not intersect)",
+                        meta={"fatal": True, "family": "gm_write_overlap"}))
+    return out

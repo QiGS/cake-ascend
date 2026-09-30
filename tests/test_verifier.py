@@ -22,6 +22,32 @@ class TestVerifier(unittest.TestCase):
         gates = [f for f in findings if f.severity == GATE]
         self.assertEqual(gates, [])
 
+    def test_verify_or_raise(self):
+        # regression: the body must forward the registry (it once didn't)
+        from cakeasc.verifier import verify_or_raise
+        from cakeasc.diagnostics import GateRejected
+        rest = verify_or_raise(build_tiny()[0], self.arch, self.reg)
+        self.assertIsInstance(rest, list)
+
+        def starved(m):
+            X = m.gm_param("X", "bf16", (64,))
+            O = m.gm_param("O", "bf16", (64,))
+            ub = m.ub_pool("ub", 1024)
+            buf = ub.view("b", 0, (16,), "bf16", 1)
+            a = m.role("a", "MTE2")
+            b = m.role("b", "MTE3")
+            e = m.event("e", a, b)
+            with a:
+                m.gm2ub(buf[0], X, (0,))
+            with b:
+                m.wait(e)
+                m.ub2gm(O, (0,), buf[0])
+        prog = asc.build(starved, name="starved", block_dim=1)
+        with self.assertRaises(GateRejected) as ctx:
+            verify_or_raise(prog, self.arch, self.reg)
+        self.assertTrue(ctx.exception.findings)
+        self.assertTrue(all(f.severity == GATE for f in ctx.exception.findings))
+
     def test_event_starvation_gates(self):
         def bad(m):
             X = m.gm_param("X", "bf16", (64,))

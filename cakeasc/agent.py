@@ -14,6 +14,7 @@ authority; every result is retained in the archive for auditability.
 """
 from __future__ import annotations
 
+import os
 import random
 import time
 from dataclasses import dataclass, field
@@ -49,10 +50,6 @@ class CandidateEval:
     measured_cycles: float | None = None
     correct_note: str = ""
     programs: list = field(default_factory=list)
-
-    @property
-    def speedup(self) -> float | None:
-        return None
 
 
 @dataclass
@@ -257,8 +254,19 @@ class Evolution:
                     fn, name=f"{self.wl.name}_{cid}", block_dim=cand.block_dim,
                     provenance={"params": payload.__dict__, "note": note})
             else:  # LLM/hand-authored source
+                # SECURITY: exec() of remote-LLM output is arbitrary code
+                # execution by design (same trust model as applying an LLM
+                # patch to any repo). Only point the proposer at endpoints
+                # you control; set CAKEASC_DISALLOW_EXEC=1 to hard-disable.
+                if os.environ.get("CAKEASC_DISALLOW_EXEC"):
+                    raise IRConstructionError(
+                        "execution of authored schedule sources is disabled "
+                        "(CAKEASC_DISALLOW_EXEC is set)",
+                        region="source",
+                        hint="run with the heuristic proposer only, or unset "
+                             "CAKEASC_DISALLOW_EXEC in a trusted environment")
                 ns = {}
-                exec(payload, ns)  # noqa: S102 — local, offline, agent-authored
+                exec(payload, ns)  # noqa: S102 — trusted-source policy above
                 kern = ns.get("kern")
                 if kern is None:
                     raise IRConstructionError("source defines no `def kern(m)`",

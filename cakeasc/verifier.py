@@ -19,7 +19,8 @@ def verify(program: Program, arch: Arch, registry) -> list:
 
 
 def verify_or_raise(program: Program, arch: Arch, registry) -> list:
-    findings = verify(program, arch)
+    """Verify; raise GateRejected if any blocking gate fails (returns the rest)."""
+    findings = verify(program, arch, registry)
     gates = [f for f in findings if f.severity == GATE]
     if gates:
         raise GateRejected(gates)

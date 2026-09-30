@@ -164,6 +164,29 @@ class TestDynamicFindings(unittest.TestCase):
                         {"A": [0.5] * 1024, "B": [0.5] * 1024, "C": [0.0] * 1024})
         self.assertIn("DATA.matmul_uninit_acc", [f.code for f in sim.findings])
 
+    def test_cross_core_gm_write_overlap(self):
+        def kern(m):
+            X = m.gm_param("X", "bf16", (64,))
+            O = m.gm_param("O", "bf16", (64,))
+            ub = m.ub_pool("ub", 1024)
+            buf = ub.view("b", 0, (16,), "bf16", 1)
+            a = m.role("a", "MTE2")
+            b = m.role("b", "MTE3")
+            e = m.event("e", a, b)
+            # both cores write the SAME GM range (bad partition)
+            with a:
+                m.gm2ub(buf[0], X, (m.core_id() * 16,))
+                m.commit(e)
+            with b:
+                m.wait(e)
+                m.ub2gm(O, (16,), buf[0])
+        progs = asc.build_all_cores(kern, name="t", block_dim=2)
+        sim = run_simulation(progs, self.arch,
+                             inputs={"X": [0.0] * 64, "O": [0.0] * 64},
+                             input_shapes={"X": (64,), "O": (64,)})
+        self.assertFalse(sim.ok)
+        self.assertIn("SAFETY.gm_write_overlap", [f.code for f in sim.findings])
+
     def test_determinism(self):
         w = wl.get("gemm")
         p = w.default_params()

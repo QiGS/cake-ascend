@@ -20,6 +20,16 @@ class LLMError(Exception):
 
 
 class LLMClient:
+    """OpenAI-compatible chat client.
+
+    SECURITY NOTE: schedule sources produced through this client are later
+    `exec`-uted by the agent loop to trace them into IR programs. That is
+    arbitrary code execution by design (the same trust model as applying an
+    LLM-written patch to any repository) — only configure endpoints you
+    control (CAKEASC_LLM_BASE_URL), and prefer https. Set
+    CAKEASC_DISALLOW_EXEC=1 to forbid executing authored sources entirely.
+    """
+
     def __init__(self, base_url=None, api_key=None, model=None, timeout=None):
         self.base_url = (base_url or os.environ.get("CAKEASC_LLM_BASE_URL", "")).rstrip("/")
         self.api_key = api_key or os.environ.get("CAKEASC_LLM_API_KEY", "")

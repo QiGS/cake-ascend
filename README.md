@@ -145,9 +145,17 @@ tests/             38 tests (also part of the corpus gate's valid set)
 - **No Ascend hardware locally**: execution authority is the deterministic
   simulator (numerics + timing), which plays the roles of runtime, Compute
   Sanitizer and CUPTI. `codegen.py` emits real, inspectable AscendC source
-  (TPipe/TQue/TBuf, DataCopy, SetFlag/WaitFlag, Matmul, SyncAll) but it has
-  never been compiled by a CANN toolchain — treat it as a faithful structural
-  lowering, not a proven build.
+  with concrete linear GM addresses (deterministic by construction), a
+  single `TPipe` with per-slot `TBuf`s, cube operands staged at `A1/A2`
+  (L1->L0A/L0B) rather than UB, `SetFlag/WaitFlag` choreography, and the
+  Matmul API — but it has never been compiled by a CANN toolchain; treat it
+  as a faithful structural lowering, not a proven build.
+- **Security note on the LLM proposer**: schedule sources authored by a
+  remote model are `exec`-uted locally to be traced into IR — arbitrary
+  code execution by design, the same trust model as applying an LLM-written
+  patch to any repo. Only configure endpoints you control
+  (`CAKEASC_LLM_BASE_URL`); set `CAKEASC_DISALLOW_EXEC=1` to hard-disable
+  executing authored sources.
 - **Arch numbers are modeling defaults** from public 910B-class figures
   (per-core bandwidth shares, cube MACs, launch overhead). They are
   calibratable by design; re-anchor on hardware before trusting absolute
@@ -162,8 +170,11 @@ tests/             38 tests (also part of the corpus gate's valid set)
   `_MODEL`) but the offline demo uses the deterministic heuristic proposer,
   which exercises the identical four-stage loop and harness.
 - **Single-shape evolution then portfolio generalization** follows paper Sec. 6
-  (separate objectives, guards partition a declared domain, explicit fallback,
-  no evaluation leakage), at demo scale.
+  (separate objectives, guards partition a declared domain, explicit fallback):
+  the domain is split deterministically into tuning and held-out shards —
+  route selection happens on tuning shards only, held-out shards inherit
+  routes through guard predicates and are used purely for validation
+  (anti-leakage), and Gspan is reported over the full domain.
 
 ## Extending
 

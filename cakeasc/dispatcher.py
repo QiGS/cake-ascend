@@ -30,6 +30,7 @@ class Route:
     ok: bool = False
     detail: str = ""
     is_fallback: bool = False
+    is_heldout: bool = False       # validated without route selection (anti-leakage)
 
     @property
     def speedup(self) -> float | None:
@@ -53,17 +54,20 @@ class PortfolioReport:
         return math.exp(sum(math.log(s) for s in sps) / len(sps))
 
     def format(self, seconds_per_cycle) -> str:
+        n_held = sum(1 for r in self.routes if r.is_heldout)
         lines = [f"dispatcher portfolio: {self.workload} "
-                 f"({len(self.routes)} shapes, {self.fallbacks} fallback, "
+                 f"({len(self.routes)} shapes: {len(self.routes) - n_held} tuning / "
+                 f"{n_held} held-out, {self.fallbacks} fallback, "
                  f"{self.failures} route rejections)"]
         for r in self.routes:
             us = r.measured_cycles * seconds_per_cycle * 1e6 if r.measured_cycles else None
             sp = f"{r.speedup:.3f}x" if r.speedup else "-"
             us_txt = f"{us:>8.2f}us" if us is not None else "        -"
+            tag = "[heldout]" if r.is_heldout else "         "
             lines.append(
                 f"  {r.shape}: {r.params_desc:<46} "
                 f"{'' if r.ok else 'INVALID '}"
-                f"{us_txt}  {sp:>8}  "
+                f"{us_txt}  {sp:>8}  {tag}"
                 f"{'(fallback)' if r.is_fallback else ''} {r.detail}")
         if self.gspan:
             lines.append(f"  Gspan (geomean speedup vs naive, dispatcher-inclusive): "
@@ -72,6 +76,16 @@ class PortfolioReport:
 
 
 def build_portfolio(evolution, domain=None, log=None) -> PortfolioReport:
+    """Generalize the evolved seeds over the declared shape domain.
+
+    Anti-leakage protocol (paper Sec. 6, "Preventing evaluation leakage"):
+    the domain is split deterministically into tuning and held-out shards.
+    Route selection (trying candidates, choosing the best) happens on tuning
+    shards only; held-out shards inherit routes through the guard predicates
+    (most tuning wins, then best span) and are used purely for validation.
+    Guards partition the declared domain — no new evaluation shapes are
+    introduced.
+    """
     wl = evolution.wl
     arch = evolution.arch
     domain = domain or wl.domain
@@ -81,9 +95,18 @@ def build_portfolio(evolution, domain=None, log=None) -> PortfolioReport:
     correct = [c for c in evolution.archive if c.stage == "correct" and c.params]
     correct.sort(key=lambda c: c.measured_cycles)
 
-    for shape in domain:
+    # deterministic shard split: sort shapes by canonical key, alternate
+    ordered = sorted(domain, key=lambda s: tuple(sorted(s.items())))
+    tuning_shapes = ordered[0::2]
+    heldout_shapes = ordered[1::2]
+    tuning_wins = {}                # id(params) -> (wins, cand)
+
+    routes_by_shape = {}
+
+    # ---- tuning shards: selection allowed here ----
+    for shape in tuning_shapes:
         naive = _measure(evolution, shape, wl.default_params(), "naive")
-        route = Route(shape=shape, naive_cycles=naive and naive[0])
+        route = Route(shape=shape, naive_cycles=naive and naive[0], is_heldout=False)
         chosen = None
         for cand in correct:
             if not wl.domain_guard(shape, cand.params):
@@ -95,7 +118,7 @@ def build_portfolio(evolution, domain=None, log=None) -> PortfolioReport:
             span, ok, detail = measured
             if not ok:
                 report.failures += 1
-                continue              # route rejected; try next seed
+                continue          # route rejected; try next seed
             chosen = (cand, span, detail)
             break
         if chosen is None:
@@ -113,10 +136,58 @@ def build_portfolio(evolution, domain=None, log=None) -> PortfolioReport:
             route.measured_cycles = span
             route.ok = True
             route.detail = detail or ""
-        report.routes.append(route)
+            wins, _ = tuning_wins.get(id(cand.params), (0, cand))
+            tuning_wins[id(cand.params)] = (wins + 1, cand)
+        routes_by_shape[_shape_key(shape)] = route
+
+    # ---- held-out shards: routes fixed by guards, validation only ----
+    for shape in heldout_shapes:
+        naive = _measure(evolution, shape, wl.default_params(), "naive")
+        route = Route(shape=shape, naive_cycles=naive and naive[0], is_heldout=True)
+        eligible = [cand for cand in correct
+                    if wl.domain_guard(shape, cand.params)]
+        # rank by tuning wins, then measured span — no measurement of
+        # candidates at this shape before the route is chosen
+        eligible.sort(key=lambda c: (-tuning_wins.get(id(c.params), (0, c))[0],
+                                     c.measured_cycles))
+        chosen = None
+        for cand in eligible:
+            measured = _measure(evolution, shape, cand.params, cand.note)
+            if measured is None:
+                report.failures += 1
+                continue
+            span, ok, detail = measured
+            if not ok:
+                report.failures += 1
+                continue          # guard-claimed route fails on held-out data
+            chosen = (cand, span, detail)
+            break
+        if chosen is None:
+            span, ok, detail = naive
+            route.is_fallback = True
+            report.fallbacks += 1
+            route.params_desc = "naive(fallback)"
+            route.measured_cycles = span
+            route.ok = bool(ok)
+            route.detail = detail or ""
+        else:
+            cand, span, detail = chosen
+            route.params_desc = _params_desc(cand.params)
+            route.note = cand.note
+            route.measured_cycles = span
+            route.ok = True
+            route.detail = detail or ""
+        routes_by_shape[_shape_key(shape)] = route
+
+    # report in the declared domain order
+    report.routes = [routes_by_shape[_shape_key(s)] for s in domain]
     if log:
         log(report.format(arch.seconds_per_cycle()))
     return report
+
+
+def _shape_key(shape) -> tuple:
+    return tuple(sorted(shape.items()))
 
 
 def _params_desc(params) -> str:

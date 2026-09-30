@@ -41,7 +41,8 @@ class TestCostModel(unittest.TestCase):
         self.assertEqual(cal2.for_arch("ascend910b", "sync"), (1.0, 4.0))
         self.assertEqual(cal2.for_arch("ascend910b", "copy"), (1.1, 0.0))
 
-    def test_uncalibrated_coverage_flag(self):
+    def test_coverage_labels_honest(self):
+        # modeling defaults never claim calibration they do not have
         rep = predict_cores(build(self.w, self.shape, self.w.default_params()),
                             self.arch, Calibration())
         self.assertEqual(rep.coverage, "default-anchors")
@@ -49,7 +50,17 @@ class TestCostModel(unittest.TestCase):
         cal.update("ascend910b", overheads={"sync": 4.0})
         rep2 = predict_cores(build(self.w, self.shape, self.w.default_params()),
                              self.arch, cal)
-        self.assertEqual(rep2.coverage, "calibrated")
+        self.assertEqual(rep2.coverage, "learned-calibration")
+
+    def test_multi_core_attribution_bounded(self):
+        # attribution uses the critical core's profile: fractions must stay
+        # <= 1.0 per class (summing across cores would double-count)
+        p = type(self.w.default_params())(**{**self.w.default_params().__dict__,
+                                             "block_dim": 2})
+        rep = predict_cores(build(self.w, self.shape, p), self.arch, Calibration())
+        for cls, frac in rep.attribution.items():
+            self.assertLessEqual(frac, 1.0 + 1e-9,
+                                 f"attribution {cls}={frac} exceeds span")
 
     def test_report_has_hints(self):
         vw = wl.get("vec_add")

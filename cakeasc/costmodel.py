@@ -141,15 +141,11 @@ class CostReport:
     arch_name: str
     span_cycles: float
     launch_cycles: float
-    busy: dict                    # cost class -> cycles
+    busy: dict                    # cost class -> summed op cycles (roles may overlap)
     bottleneck: str
-    attribution: dict             # class -> fraction of span
-    coverage: str                 # "calibrated" | "default-anchors"
+    attribution: dict             # class -> fraction of span active (interval union, <= 1)
+    coverage: str                 # "learned-calibration" | "default-anchors" | "hardware-anchored+learned"
     hints: list = field(default_factory=list)
-
-    @property
-    def span_us(self) -> float:
-        return self.span_cycles  # caller converts via arch seconds_per_cycle
 
     def format(self) -> str:
         lines = [
@@ -159,22 +155,45 @@ class CostReport:
         ]
         for cls, cyc in sorted(self.busy.items(), key=lambda kv: -kv[1]):
             frac = self.attribution.get(cls, 0.0)
-            lines.append(f"  {cls:<8} {cyc:9.0f} cyc  ({frac * 100:4.1f}% of span)")
+            lines.append(f"  {cls:<8} {cyc:9.0f} cyc busy ({frac * 100:4.1f}% of span active)")
         for h in self.hints:
             lines.append(f"  hint: {h}")
         return "\n".join(lines)
 
 
-def _bottleneck(span, busy):
-    if span <= 0:
-        return "unknown", {}
-    attr = {cls: cyc / span for cls, cyc in busy.items()}
-    agg = {COPY: 0.0, MATMUL: 0.0, VECTOR: 0.0, SYNC: 0.0}
-    for cls, frac in attr.items():
-        agg[cls] = agg.get(cls, 0.0) + frac
-    top = max(agg, key=lambda c: agg[c])
-    if agg[top] < 0.25:
+def _utilization(exec_log, span) -> dict:
+    """Per-class fraction of the span during which that class is executing.
+
+    Computed as a union of execution intervals, so concurrent roles of the
+    same class do not double-count: every fraction is <= 1. Classes may sum
+    above 1 across categories (they overlap by design in a pipelined
+    schedule) — that is utilization, not exclusive time share.
+    """
+    per_class = {}
+    for op, s, e in exec_log:
+        per_class.setdefault(cost_class(op), []).append((s, e))
+    out = {}
+    for cls, ivs in per_class.items():
+        ivs.sort()
+        total, cs, ce = 0.0, None, None
+        for s, e in ivs:
+            if cs is None:
+                cs, ce = s, e
+            elif s <= ce:
+                ce = max(ce, e)
+            else:
+                total += ce - cs
+                cs, ce = s, e
+        if cs is not None:
+            total += ce - cs
+        out[cls] = total / span if span > 0 else 0.0
+    return out
+
+
+def _bottleneck(agg):
+    if not agg or max(agg.values()) < 0.25:
         return "launch_overhead", agg
+    top = max(agg, key=lambda c: agg[c])
     return {
         COPY: "memory_bound",
         MATMUL: "cube_bound",
@@ -206,6 +225,13 @@ def _hints(program, bottleneck, agg):
 # prediction
 
 
+def _coverage(arch: Arch, cal: Calibration) -> str:
+    """Honest coverage label (paper B.5: decline to inherit anchors)."""
+    if cal.has_arch(arch.name):
+        return "hardware-anchored+learned" if arch.calibrated else "learned-calibration"
+    return "hardware-anchored" if arch.calibrated else "default-anchors"
+
+
 def predict(program: Program, arch: Arch, cal: Calibration | None = None) -> CostReport:
     """Analytic timing of one core program via the deterministic scheduler
     (timing-only, no numerics, analytic durations)."""
@@ -222,31 +248,31 @@ def predict(program: Program, arch: Arch, cal: Calibration | None = None) -> Cos
     for op, _s, _e in interp.exec_log:
         c = cost_class(op)
         busy[c] = busy.get(c, 0.0) + analytic_cycles(op, arch, cal)
-    bn, agg = _bottleneck(span, busy)
-    coverage = "calibrated" if (arch.calibrated and cal.has_arch(arch.name)) else \
-        "default-anchors"
+    agg = _utilization(interp.exec_log, span)
+    bn, _ = _bottleneck(agg)
     return CostReport(
         program_name=program.name, arch_name=arch.name, span_cycles=span + launch,
         launch_cycles=launch, busy=busy, bottleneck=bn, attribution=agg,
-        coverage=coverage, hints=_hints(program, bn, agg))
+        coverage=_coverage(arch, cal), hints=_hints(program, bn, agg))
 
 
 def predict_cores(programs, arch: Arch, cal: Calibration | None = None) -> CostReport:
-    """Predict a multi-core candidate: span = slowest core (data-parallel launch)."""
+    """Predict a multi-core candidate: span = slowest core (data-parallel launch).
+
+    Attribution uses the critical (slowest) core's own utilization profile so
+    that per-class fractions of span stay <= 1.0; summing across cores would
+    double-count concurrent execution.
+    """
     if not programs:
         raise ValueError("no programs")
     reports = [predict(p, arch, cal) for p in programs]
-    span = max(r.span_cycles for r in reports)
-    busy = {}
-    for r in reports:
-        for cls, cyc in r.busy.items():
-            busy[cls] = busy.get(cls, 0.0) + cyc
-    bn, agg = _bottleneck(span, busy)
-    r0 = reports[0]
+    critical = max(reports, key=lambda r: r.span_cycles)
+    bn, _ = _bottleneck(critical.attribution)
     return CostReport(
-        program_name=r0.program_name, arch_name=r0.arch_name, span_cycles=span,
-        launch_cycles=r0.launch_cycles, busy=busy, bottleneck=bn, attribution=agg,
-        coverage=r0.coverage, hints=_hints(programs[0], bn, agg))
+        program_name=critical.program_name, arch_name=critical.arch_name,
+        span_cycles=critical.span_cycles, launch_cycles=critical.launch_cycles,
+        busy=critical.busy, bottleneck=bn, attribution=critical.attribution,
+        coverage=critical.coverage, hints=_hints(programs[0], bn, critical.attribution))
 
 
 def misprediction(predicted: float, measured: float | None) -> float | None:
