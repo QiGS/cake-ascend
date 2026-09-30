@@ -150,12 +150,20 @@ tests/             38 tests (also part of the corpus gate's valid set)
 
 - **No Ascend hardware locally**: execution authority is the deterministic
   simulator (numerics + timing), which plays the roles of runtime, Compute
-  Sanitizer and CUPTI. `codegen.py` emits real, inspectable AscendC source
-  with concrete linear GM addresses (deterministic by construction), a
-  single `TPipe` with per-slot `TBuf`s, cube operands staged at `A1/A2`
-  (L1->L0A/L0B) rather than UB, `SetFlag/WaitFlag` choreography, and the
-  Matmul API — but it has never been compiled by a CANN toolchain; treat it
-  as a faithful structural lowering, not a proven build.
+  Sanitizer and CUPTI. `codegen.py` emits AscendC against the real API
+  surface — `kernel_operator.h`, `using namespace AscendC`, `GM_ADDR` entry
+  params with `__gm__` typed casts, `bfloat16_t/half_t/float_t`, the real
+  HardEvent enum (cube queue = `M`: `MTE2_M`/`M_MTE2`/`M_MTE3`/...) with
+  `EVENT_ID<n>` per stage, `TPipe` + `TBuf<TPosition::VECCALC>` (UB) /
+  `TCubeTBuf<TPosition::A1|A2>` (L1 cube operands) / `TCubeTBuf<TPosition::C1C2>`
+  (L0C), `matmul::Matmul` + `SetTensorA/B/C` + `Iterate`, `CopyTensor`, and
+  real elementwise primitives (`Add/Sub/Mul/Min/Max/Muls/Adds/Exp/Abs/Cast`).
+  The gemm and vec_add paths are primitive-clean; composite epilogue ops
+  (reduce/argmin/transpose/broadcast, used by kmeans_assign) are emitted
+  with explicit NOTE markers since they have no single primitive. Still
+  never compiled by a CANN toolchain on this machine — matmul template
+  arity and include paths vary across CANN versions, so treat it as a
+  faithful structural lowering pending an on-device compile.
 - **Security note on the LLM proposer**: schedule sources authored by a
   remote model are `exec`-uted locally to be traced into IR — arbitrary
   code execution by design, the same trust model as applying an LLM-written
