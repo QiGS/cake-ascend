@@ -20,6 +20,7 @@ from . import dtypes as dt
 from .arch import Arch
 from .ir import (
     Commit,
+    Gm2L1,
     Gm2Ub,
     HardBarrier,
     L0c2Ub,
@@ -47,7 +48,7 @@ _BARRIER_CYCLES = 32.0
 
 
 def cost_class(op) -> str:
-    if isinstance(op, (Gm2Ub, Ub2Gm, L0c2Ub)):
+    if isinstance(op, (Gm2Ub, Gm2L1, Ub2Gm, L0c2Ub)):
         return COPY
     if isinstance(op, Matmul):
         return MATMUL
@@ -62,7 +63,10 @@ def _bytes_view(view, stage_count=1):
 
 def work_cycles(op, arch: Arch) -> float:
     """Idealized work (no per-op overheads)."""
-    if isinstance(op, Gm2Ub):
+    if isinstance(op, (Gm2Ub, Gm2L1)):
+        # GM->UB and GM->L1 both stream on the MTE2 path; the matmul op's
+        # cost additionally covers the L1->L0A/L0B staging managed by the
+        # cube module (implicitly, as in the AscendC Matmul API)
         return _bytes_view(op.dst) / arch.mte2_bytes_per_cycle
     if isinstance(op, Ub2Gm):
         return _bytes_view(op.src) / arch.mte3_bytes_per_cycle

@@ -23,17 +23,17 @@ extern "C" __global__ __aicore__ void vec_add_manual(
         constexpr auto EVT_Z_FREE_0 = HardEvent::MTE3_V;
 
         TPipe pipe;
-        // view 'X': offset 0 B, (1024,) x bf16, bufferNum=2, position=VECCALC
+        // view 'X': offset 0 B, (1024,) x bf16, bufferNum=2, tier=ub, position=VECCALC
         TBuf<TPosition::VECCALC> buf_X_0;
         pipe.InitBuffer(buf_X_0, 2048);
         TBuf<TPosition::VECCALC> buf_X_1;
         pipe.InitBuffer(buf_X_1, 2048);
-        // view 'Y': offset 4096 B, (1024,) x bf16, bufferNum=2, position=VECCALC
+        // view 'Y': offset 4096 B, (1024,) x bf16, bufferNum=2, tier=ub, position=VECCALC
         TBuf<TPosition::VECCALC> buf_Y_0;
         pipe.InitBuffer(buf_Y_0, 2048);
         TBuf<TPosition::VECCALC> buf_Y_1;
         pipe.InitBuffer(buf_Y_1, 2048);
-        // view 'Z': offset 8192 B, (1024,) x bf16, bufferNum=1, position=VECCALC
+        // view 'Z': offset 8192 B, (1024,) x bf16, bufferNum=1, tier=ub, position=VECCALC
         TBuf<TPosition::VECCALC> buf_Z_0;
         pipe.InitBuffer(buf_Z_0, 2048);
 
@@ -133,17 +133,17 @@ extern "C" __global__ __aicore__ void vec_add_manual(
         constexpr auto EVT_Z_FREE_0 = HardEvent::MTE3_V;
 
         TPipe pipe;
-        // view 'X': offset 0 B, (1024,) x bf16, bufferNum=2, position=VECCALC
+        // view 'X': offset 0 B, (1024,) x bf16, bufferNum=2, tier=ub, position=VECCALC
         TBuf<TPosition::VECCALC> buf_X_0;
         pipe.InitBuffer(buf_X_0, 2048);
         TBuf<TPosition::VECCALC> buf_X_1;
         pipe.InitBuffer(buf_X_1, 2048);
-        // view 'Y': offset 4096 B, (1024,) x bf16, bufferNum=2, position=VECCALC
+        // view 'Y': offset 4096 B, (1024,) x bf16, bufferNum=2, tier=ub, position=VECCALC
         TBuf<TPosition::VECCALC> buf_Y_0;
         pipe.InitBuffer(buf_Y_0, 2048);
         TBuf<TPosition::VECCALC> buf_Y_1;
         pipe.InitBuffer(buf_Y_1, 2048);
-        // view 'Z': offset 8192 B, (1024,) x bf16, bufferNum=1, position=VECCALC
+        // view 'Z': offset 8192 B, (1024,) x bf16, bufferNum=1, tier=ub, position=VECCALC
         TBuf<TPosition::VECCALC> buf_Z_0;
         pipe.InitBuffer(buf_Z_0, 2048);
 

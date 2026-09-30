@@ -86,8 +86,18 @@ class GmParam:
 
 @dataclass
 class UbPool:
+    """A tiered on-chip memory pool.
+
+    tier="ub": Unified Buffer — feeds the vector units (VECCALC position).
+    tier="l1": L1 / local buffer — stages cube operands (A1/A2 positions,
+               drained by the matmul module into L0A/L0B). The cube operand
+               path on Ascend is GM -> L1 -> L0A/L0B -> (accumulate) L0C;
+               cube operands must NOT live in UB.
+    """
+
     name: str
     size: int
+    tier: str = "ub"
 
     def view(self, name: str, offset: int, shape, dtype: str, stages: int = 1) -> UbView:
         """Declare a staged view into this pool (`pool.view(...)` registers it
@@ -222,6 +232,15 @@ class Gm2Ub(Op):
 
 
 @dataclass
+class Gm2L1(Op):
+    """DataCopy GM -> L1, feeding the cube operand path (A1/A2 staging)."""
+    dst: UbView = None
+    stage: int = 0
+    src: GmParam = None
+    gm_off: tuple = ()
+
+
+@dataclass
 class Ub2Gm(Op):
     dst: GmParam = None
     gm_off: tuple = ()
@@ -326,12 +345,13 @@ class HardBarrier(Op):
     scope: str = "block"
 
 
-MEMORY_OPS = ("Gm2Ub", "Ub2Gm", "L0c2Ub")
+MEMORY_OPS = ("Gm2Ub", "Gm2L1", "Ub2Gm", "L0c2Ub")
 COMPUTE_OPS = ("Matmul", "VBinary", "VUnary", "VReduce", "VArgmin",
                "VTranspose", "VBcast", "VCast")
 SYNC_OPS = ("Commit", "Wait", "HardBarrier")
 ROLE_KIND_OPS = {
-    "MTE2": ("Gm2Ub",),
+    # GM->UB and GM->L1 are both issued on the MTE2 queue
+    "MTE2": ("Gm2Ub", "Gm2L1"),
     "MTE3": ("Ub2Gm",),
     # l0c->ub epilogue copy is issued from the cube pipeline (FIX-unit analog)
     "CUBE": ("Matmul", "L0c2Ub"),

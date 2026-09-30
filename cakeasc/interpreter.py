@@ -39,6 +39,7 @@ from .arch import Arch
 from .diagnostics import DYN, Finding
 from .ir import (
     Commit,
+    Gm2L1,
     Gm2Ub,
     HardBarrier,
     L0c2Ub,
@@ -213,10 +214,13 @@ class CoreInterpreter:
         arch = self.arch
         prog = self.prog
         for pool in prog.ub_pools:
-            if pool.size > arch.ub_bytes:
+            capacity = arch.l1_bytes if pool.tier == "l1" else arch.ub_bytes
+            tier = pool.tier.upper()
+            if pool.size > capacity:
                 self._dyn("ub_overflow",
-                          f"UB pool '{pool.name}' is {pool.size} B; device UB is {arch.ub_bytes} B",
-                          region=f"ub:{pool.name}", fatal=True,
+                          f"{tier} pool '{pool.name}' is {pool.size} B; "
+                          f"device {tier} is {capacity} B",
+                          region=f"{pool.tier}:{pool.name}", fatal=True,
                           hint="shrink tiles or stages to fit on-chip memory")
         for v in prog.ub_views:
             if v.offset + v.total_bytes > v.pool.size:
@@ -412,7 +416,7 @@ class CoreInterpreter:
 
     def _values(self, op):
         try:
-            if isinstance(op, Gm2Ub):
+            if isinstance(op, (Gm2Ub, Gm2L1)):
                 self._do_gm2ub(op)
             elif isinstance(op, Ub2Gm):
                 self._do_ub2gm(op)
@@ -460,7 +464,8 @@ class CoreInterpreter:
         self.slot_writer[key] = op
         self._record_write(view, stage, op)
 
-    def _do_gm2ub(self, op: Gm2Ub):
+    def _do_gm2ub(self, op):
+        """Shared numerics for GM->UB and GM->L1 staging copies."""
         src_shape = self.gm_shapes[op.src.name]
         if len(op.gm_off) != len(src_shape):
             return
@@ -693,7 +698,7 @@ def _reads_of(op):
 
 def _writes_of(op):
     out = []
-    if isinstance(op, Gm2Ub):
+    if isinstance(op, (Gm2Ub, Gm2L1)):
         out.append((op.dst, op.stage))
     elif isinstance(op, L0c2Ub):
         out.append((op.dst, op.stage))

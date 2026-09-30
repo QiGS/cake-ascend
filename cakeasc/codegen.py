@@ -19,6 +19,7 @@ from . import dtypes as dt
 from .arch import Arch
 from .ir import (
     Commit,
+    Gm2L1,
     Gm2Ub,
     HardBarrier,
     L0c2Ub,
@@ -149,19 +150,22 @@ class AscendCCodeGen:
         if seen:
             self.w()
         # derived buffer init: one TPipe per program; one TBuf per staged slot.
-        # Cube operand views lower to L1 staging (A1/A2 -> L0A/L0B), NOT UB:
-        # on the cube path operands live in the L0 tier, the accumulator in
-        # L0C; vector/epilogue views live in UB (VECCALC).
+        # Tier placement follows the pool the view lives in: L1 views are the
+        # cube operand path (A1/A2 -> L0A/L0B), UB views feed the vector
+        # units (VECCALC); the accumulator stays in L0C.
         mm_a, mm_b = _matmul_operand_views(prog)
         self.w("TPipe pipe;")
         for view in prog.ub_views:
             bytes_ = view.slot_bytes
             bufnum = view.stages
-            position = "A1" if view.name in mm_a else \
-                "A2" if view.name in mm_b else "VECCALC"
+            if view.pool.tier == "l1":
+                position = "A1" if view.name in mm_a else \
+                    "A2" if view.name in mm_b else "A1"
+            else:
+                position = "VECCALC"
             self.comment(f"view '{view.name}': offset {view.offset} B, "
                          f"{view.shape} x {view.dtype}, bufferNum={bufnum}, "
-                         f"position={position}")
+                         f"tier={view.pool.tier}, position={position}")
             for s in range(view.stages):
                 local = self._local(view, s)
                 self.w(f"TBuf<TPosition::{position}> {local};")
@@ -187,7 +191,7 @@ class AscendCCodeGen:
                     if stack:
                         stack.pop()
                 continue
-            if isinstance(op, Gm2Ub):
+            if isinstance(op, (Gm2Ub, Gm2L1)):
                 self._emit_gm2ub(op)
             elif isinstance(op, Ub2Gm):
                 self._emit_ub2gm(op)
@@ -235,13 +239,14 @@ class AscendCCodeGen:
             strides[d] = strides[d + 1] * param_shape[d + 1]
         return sum(off * st for off, st in zip(gm_off, strides))
 
-    def _emit_gm2ub(self, op: Gm2Ub):
+    def _emit_gm2ub(self, op):
         dst = self._local(op.dst, op.stage)
         off = ", ".join(str(o) for o in op.gm_off)
         n = shape_numel(op.dst.shape)
         lin = self._linear_offset(op.gm_off, op.src.shape)
-        self.comment(f"gm2ub {op.src.name}[{off}] -> {op.dst.name}[{op.stage}] "
-                     f"({op.dst.shape})")
+        tier = op.dst.pool.tier.upper()
+        self.comment(f"gm2{tier.lower()} {op.src.name}[{off}] -> "
+                     f"{op.dst.name}[{op.stage}] ({op.dst.shape})")
         self.w(f"DataCopy({dst}.template GetTensor<{_ASCENDC_TYPE[op.dst.dtype]}>(), "
                f"{op.src.name} + {lin}, {n});")
 

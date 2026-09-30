@@ -81,8 +81,11 @@ concrete: shapes, offsets, and trip counts are literals.
 
 Resources (declare once, use by name):
   m.gm_param(name, dtype, shape)            # GM tensor param (bf16|fp16|fp32|int32)
-  ub = m.ub_pool(name, size_bytes)          # Unified Buffer pool (<= 232448 B)
-  v  = ub.view(name, offset, shape, dtype, stages)   # staged tile view into pool
+  ub = m.ub_pool(name, size_bytes)          # Unified Buffer pool (<= 232448 B):
+                                            #   feeds the VECTOR units only
+  l1 = m.l1_pool(name, size_bytes)          # L1 pool (<= 524288 B): stages CUBE
+                                            #   operands (A1/A2 -> L0A/L0B)
+  v  = pool.view(name, offset, shape, dtype, stages)   # staged tile view into pool
   acc = m.l0c(name, shape)                  # fp32 cube accumulator (L0C)
   r  = m.role(name, kind)                   # kind: MTE2|CUBE|V|MTE3|SCALAR
   pipe = m.pipeline(name, stages)           # 1..4
@@ -94,19 +97,24 @@ Control:
   m.core_id() / m.core_count()              # per-core specialization
   m.num_tiles(total, tile)                  # ceil-div helper
 
-Ops (inside role blocks only):
-  m.gm2ub(view[stage], param, gm_off)       # DataCopy GM->UB (MTE2); dtype must match
-  m.ub2gm(param, gm_off, view[stage])       # DataCopy UB->GM (MTE3); dtype must match
+Ops (inside role blocks only) — tier contracts are enforced at construction:
+  m.gm2ub(view[stage], param, gm_off)       # DataCopy GM->UB (MTE2); UB-tier dst
+  m.gm2l1(view[stage], param, gm_off)       # DataCopy GM->L1 (MTE2); L1-tier dst
+  m.ub2gm(param, gm_off, view[stage])       # DataCopy UB->GM (MTE3); UB-tier src
   m.matmul(acc, a[stage], b[stage], clear)  # CUBE: (M,K)x(K,N)->acc(M,N) fp32;
+                                            # operands MUST be L1-tier views;
                                             # clear=True on first K-step of a chain
   m.l0c2ub(view[stage], acc)                # accumulator -> UB
-  m.v_binary(op, dst, x, y|scalar)          # add|sub|mul|min|max (elementwise)
+  m.v_binary(op, dst, x, y|scalar)          # add|sub|mul|min|max (elementwise);
   m.v_unary(op, dst, x)                     # neg|abs|sqrt|exp|copy
   m.v_reduce(op, dst1d, x2d)                # sum|max|min along last axis -> (R,)
   m.v_argmin(dst_int32_1d, x2d)             # argmin along last axis -> (R,)
   m.v_transpose(dst, x)                     # (R,C) -> (C,R)
   m.v_bcast("row"|"col", dst2d, x1d)        # (R,)->(R,C) rows / (C,)->(R,C) cols
   m.v_cast(dst, x)                          # dtype conversion
+  All v_* operands and results are UB-tier: the vector units read Unified
+  Buffer only. Data needed by BOTH the cube and vector paths must be loaded
+  twice (gm2l1 for the matmul operand, gm2ub for the vector copy).
 
 Synchronization (the choreography the verifier checks):
   m.commit(event, stage=s)                  # only inside event.prod role

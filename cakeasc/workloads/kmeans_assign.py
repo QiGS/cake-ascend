@@ -50,26 +50,35 @@ def _kern(shape, p):
         def align32(x):
             return (x + 31) // 32 * 32
 
+        # tiered on-chip layout: cube operands (xT/cT) stage in L1 for the
+        # matmul; the same GM tiles are ALSO loaded into UB for the vector
+        # norm computations — the vector units read UB, the cube path reads
+        # L1 (A1/A2 -> L0A/L0B), so shared data needs both copies.
+        l1 = m.l1_pool("l1", 512 * 1024)
         ub = m.ub_pool("ub", 232 * 1024)
         off = 0
         x_off = off; off += align32(TB * DB * 2 * S)
         c_off = off; off += align32(DB * KB * 2 * S)
-        x2_off = off; off += align32(TB * DB * 4)
-        xrow_off = off; off += align32(TB * 4)
-        xn_off = off; off += align32(TB * 4)
-        ct_off = off; off += align32(KB * DB * 4)
-        c2_off = off; off += align32(KB * DB * 4)
-        crow_off = off; off += align32(KB * 4)
-        cn_off = off; off += align32(KB * 4)
-        cross_off = off; off += align32(TB * KB * 4)
-        t1_off = off; off += align32(TB * KB * 4)
-        t2_off = off; off += align32(TB * KB * 4)
-        d1_off = off; off += align32(TB * KB * 4)
-        d2_off = off; off += align32(TB * KB * 4)
-        idx_off = off; off += align32(TB * 4)
+        xu_off = 0
+        cu_off = xu_off + align32(TB * DB * 2 * S)
+        x2_off = cu_off + align32(DB * KB * 2 * S)
+        xrow_off = x2_off + align32(TB * DB * 4)
+        xn_off = xrow_off + align32(TB * 4)
+        ct_off = xn_off + align32(TB * 4)
+        c2_off = ct_off + align32(KB * DB * 4)
+        crow_off = c2_off + align32(KB * DB * 4)
+        cn_off = crow_off + align32(KB * 4)
+        cross_off = cn_off + align32(KB * 4)
+        t1_off = cross_off + align32(TB * KB * 4)
+        t2_off = t1_off + align32(TB * KB * 4)
+        d1_off = t2_off + align32(TB * KB * 4)
+        d2_off = d1_off + align32(TB * KB * 4)
+        idx_off = d2_off + align32(TB * KB * 4)
 
-        xT = ub.view("xT", x_off, (TB, DB), "bf16", S)
-        cT = ub.view("cT", c_off, (DB, KB), "bf16", S)
+        xT = l1.view("xT", x_off, (TB, DB), "bf16", S)
+        cT = l1.view("cT", c_off, (DB, KB), "bf16", S)
+        xU = ub.view("xU", xu_off, (TB, DB), "bf16", S)
+        cU = ub.view("cU", cu_off, (DB, KB), "bf16", S)
         x2 = ub.view("x2", x2_off, (TB, DB), "fp32", 1)
         xrow = ub.view("xrow", xrow_off, (TB,), "fp32", 1)
         xnorm = ub.view("xnorm", xn_off, (TB,), "fp32", 1)
@@ -119,11 +128,13 @@ def _kern(shape, p):
                         m.wait(x_free_v, stage=s)
                         m.wait(c_free_m, stage=s)
                         m.wait(c_free_v, stage=s)
-                    m.gm2ub(xT[s], X, ((my0 + i) * TB, dch * DB))
+                    m.gm2l1(xT[s], X, ((my0 + i) * TB, dch * DB))
                     m.commit(x_rdy_m, stage=s)
+                    m.gm2ub(xU[s], X, ((my0 + i) * TB, dch * DB))
                     m.commit(x_rdy_v, stage=s)
-                    m.gm2ub(cT[s], Ct, (dch * DB, 0))
+                    m.gm2l1(cT[s], Ct, (dch * DB, 0))
                     m.commit(c_rdy_m, stage=s)
+                    m.gm2ub(cU[s], Ct, (dch * DB, 0))
                     m.commit(c_rdy_v, stage=s)
 
         with cu:
@@ -148,8 +159,8 @@ def _kern(shape, p):
                     s = k % S
                     m.wait(x_rdy_v, stage=s)
                     m.wait(c_rdy_v, stage=s)
-                    # xnorm[t] += sum_d x[t,d]^2
-                    m.v_cast(x2[0], xT[s])
+                    # xnorm[t] += sum_d x[t,d]^2   (from the UB copy)
+                    m.v_cast(x2[0], xU[s])
                     m.v_binary("mul", x2[0], x2[0], x2[0])
                     m.v_reduce("sum", xrow[0], x2[0])
                     if dch == 0:
@@ -157,7 +168,7 @@ def _kern(shape, p):
                     else:
                         m.v_binary("add", xnorm[0], xnorm[0], xrow[0])
                     # cnorm[k] += sum_d c[k,d]^2   (transpose (DB,KB)->(KB,DB))
-                    m.v_transpose(ctt[0], cT[s])
+                    m.v_transpose(ctt[0], cU[s])
                     m.v_binary("mul", c2[0], ctt[0], ctt[0])
                     m.v_reduce("sum", crow[0], c2[0])
                     if dch == 0:

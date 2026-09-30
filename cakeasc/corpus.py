@@ -141,10 +141,11 @@ def _fx_matmul_alignment():
         A = m.gm_param("A", "bf16", (48, 48))
         B = m.gm_param("B", "bf16", (48, 48))
         C = m.gm_param("C", "fp32", (48, 48))
+        l1 = m.l1_pool("l1", 512 * 1024)
         ub = m.ub_pool("ub", 64 * 1024)
-        ba = ub.view("a", 0, (40, 48), "bf16", 1)   # 40 % 16 != 0
-        bb = ub.view("b", 8192, (48, 48), "bf16", 1)
-        bc = ub.view("c", 16384, (40, 48), "fp32", 1)
+        ba = l1.view("a", 0, (40, 48), "bf16", 1)   # 40 % 16 != 0
+        bb = l1.view("b", 8192, (48, 48), "bf16", 1)
+        bc = ub.view("c", 0, (40, 48), "fp32", 1)
         acc = m.l0c("acc", (40, 48))
         ld = m.role("ld", "MTE2")
         cu = m.role("cu", "CUBE")
@@ -152,8 +153,8 @@ def _fx_matmul_alignment():
         rdy = m.event("rdy", ld, cu)
         crdy = m.event("crdy", cu, st)
         with ld:
-            m.gm2ub(ba[0], A, (0, 0))
-            m.gm2ub(bb[0], B, (0, 0))
+            m.gm2l1(ba[0], A, (0, 0))
+            m.gm2l1(bb[0], B, (0, 0))
             m.commit(rdy)
         with cu:
             m.wait(rdy)
@@ -230,10 +231,11 @@ def _fx_first_clear():
         A = m.gm_param("A", "bf16", (32, 32))
         B = m.gm_param("B", "bf16", (32, 32))
         C = m.gm_param("C", "fp32", (32, 32))
+        l1 = m.l1_pool("l1", 512 * 1024)
         ub = m.ub_pool("ub", 64 * 1024)
-        ba = ub.view("a", 0, (32, 32), "bf16", 1)
-        bb = ub.view("b", 4096, (32, 32), "bf16", 1)
-        bc = ub.view("c", 8192, (32, 32), "fp32", 1)
+        ba = l1.view("a", 0, (32, 32), "bf16", 1)
+        bb = l1.view("b", 4096, (32, 32), "bf16", 1)
+        bc = ub.view("c", 0, (32, 32), "fp32", 1)
         acc = m.l0c("acc", (32, 32))
         ld = m.role("ld", "MTE2")
         cu = m.role("cu", "CUBE")
@@ -241,8 +243,8 @@ def _fx_first_clear():
         rdy = m.event("rdy", ld, cu)
         crdy = m.event("crdy", cu, st)
         with ld:
-            m.gm2ub(ba[0], A, (0, 0))
-            m.gm2ub(bb[0], B, (0, 0))
+            m.gm2l1(ba[0], A, (0, 0))
+            m.gm2l1(bb[0], B, (0, 0))
             m.commit(rdy)
         with cu:
             m.wait(rdy)
@@ -260,15 +262,16 @@ def _fx_l0c_capacity():
         A = m.gm_param("A", "bf16", (256, 256))
         B = m.gm_param("B", "bf16", (256, 256))
         C = m.gm_param("C", "fp32", (256, 256))
+        l1 = m.l1_pool("l1", 512 * 1024)
         ub = m.ub_pool("ub", 232 * 1024)
-        ba = ub.view("a", 0, (128, 128), "bf16", 1)
-        bb = ub.view("b", 32768, (128, 128), "bf16", 1)
+        ba = l1.view("a", 0, (128, 128), "bf16", 1)
+        bb = l1.view("b", 32768, (128, 128), "bf16", 1)
         acc = m.l0c("acc", (512, 512))                  # 1MB > l0c capacity
         ld = m.role("ld", "MTE2")
         cu = m.role("cu", "CUBE")
         rdy = m.event("rdy", ld, cu)
         with ld:
-            m.gm2ub(ba[0], A, (0, 0))
+            m.gm2l1(ba[0], A, (0, 0))
             m.commit(rdy)
         with cu:
             m.wait(rdy)

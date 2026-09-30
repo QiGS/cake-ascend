@@ -45,13 +45,15 @@ def _kern(shape, p):
         def align32(x):
             return (x + 31) // 32 * 32
 
+        # cube operand path: GM -> L1 (A1/A2 -> L0A/L0B); C epilogue in UB
+        l1 = m.l1_pool("l1", 512 * 1024)
         ub = m.ub_pool("ub", 232 * 1024)
         off = 0
         a_off = off; off += align32(BM * BK * 2 * S)
         b_off = off; off += align32(BK * BN * 2 * S)
-        c_off = off; off += align32(BM * BN * 4)
-        bufA = ub.view("A", a_off, (BM, BK), "bf16", S)
-        bufB = ub.view("B", b_off, (BK, BN), "bf16", S)
+        c_off = 0
+        bufA = l1.view("A", a_off, (BM, BK), "bf16", S)
+        bufB = l1.view("B", b_off, (BK, BN), "bf16", S)
         bufC = ub.view("C", c_off, (BM, BN), "fp32", 1)
         acc = m.l0c("acc", (BM, BN))
 
@@ -82,9 +84,9 @@ def _kern(shape, p):
                         if k >= S:
                             m.wait(a_free, stage=s)
                             m.wait(b_free, stage=s)
-                        m.gm2ub(bufA[s], A, ((my0 + i) * BM, kt * BK))
+                        m.gm2l1(bufA[s], A, ((my0 + i) * BM, kt * BK))
                         m.commit(a_rdy, stage=s)
-                        m.gm2ub(bufB[s], B, (kt * BK, j * BN))
+                        m.gm2l1(bufB[s], B, (kt * BK, j * BN))
                         m.commit(b_rdy, stage=s)
 
         with cu:

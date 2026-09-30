@@ -15,7 +15,8 @@ from dataclasses import dataclass, field
 class Arch:
     name: str
     # ---- on-chip memory (bytes, per AI Core) ----
-    ub_bytes: int            # Unified Buffer usable per vector core
+    ub_bytes: int            # Unified Buffer: feeds the vector units
+    l1_bytes: int            # L1 / local buffer: stages cube operands (A1/A2)
     l0c_bytes: int           # Cube accumulator memory per cube core
     # ---- throughput (per AI Core, per cycle) ----
     cube_macs_per_cycle: int    # bf16/fp16 MAC throughput of one cube unit
@@ -48,6 +49,7 @@ class Arch:
 ASCEND_910B = Arch(
     name="ascend910b",
     ub_bytes=232 * 1024,
+    l1_bytes=512 * 1024,
     l0c_bytes=256 * 1024,
     cube_macs_per_cycle=4096,
     vec_lanes_per_cycle=256,

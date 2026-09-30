@@ -16,6 +16,8 @@ from . import dtypes as dt
 from .arch import Arch
 from .diagnostics import Finding, GATE, HINT
 from .ir import (
+    Commit,
+    Gm2L1,
     Gm2Ub,
     L0c2Ub,
     LoopMarker,
@@ -30,7 +32,6 @@ from .ir import (
     VTranspose,
     VUnary,
     Wait,
-    Commit,
     shape_numel,
 )
 
@@ -147,30 +148,37 @@ class EventBalance(Rule):
 class UbCapacity(Rule):
     template = "ub_capacity"
     category = "hardware_conformance"
-    description = "UB pool fits on-chip; views inside pool; 32B-aligned offsets"
+    description = "on-chip pools fit their tier; views inside pool; 32B-aligned offsets"
 
     def check(self, program: Program, arch: Arch):
         out = []
         for pool in program.ub_pools:
-            if pool.size > arch.ub_bytes:
+            capacity = arch.l1_bytes if pool.tier == "l1" else arch.ub_bytes
+            tier = pool.tier.upper()
+            if pool.size > capacity:
                 out.append(self.finding(
-                    "HARDWARE.ub_pool_oversized",
-                    f"UB pool '{pool.name}' is {pool.size} B; target has {arch.ub_bytes} B",
-                    region=f"ub:{pool.name}",
+                    f"HARDWARE.{pool.tier}_pool_oversized",
+                    f"{tier} pool '{pool.name}' is {pool.size} B; "
+                    f"target has {capacity} B of {tier}",
+                    region=f"{pool.tier}:{pool.name}",
                     hint="shrink tiles or reduce pipeline stages"))
         for v in program.ub_views:
+            capacity = arch.l1_bytes if v.pool.tier == "l1" else arch.ub_bytes
+            tier = v.pool.tier.upper()
             if v.offset % arch.alignment_bytes != 0:
                 out.append(self.finding(
-                    "HARDWARE.ub_offset_unaligned",
-                    f"view '{v.name}' offset {v.offset} B is not {arch.alignment_bytes}B-aligned",
+                    f"HARDWARE.{v.pool.tier}_offset_unaligned",
+                    f"view '{v.name}' offset {v.offset} B is not "
+                    f"{arch.alignment_bytes}B-aligned",
                     region=f"view:{v.name}",
                     hint=f"round offsets up to multiples of {arch.alignment_bytes}"))
             if v.offset + v.total_bytes > v.pool.size:
                 out.append(self.finding(
-                    "HARDWARE.ub_view_out_of_pool",
-                    f"view '{v.name}' needs {v.offset}+{v.total_bytes} B but pool '{v.pool.name}' holds {v.pool.size} B",
+                    f"HARDWARE.{v.pool.tier}_view_out_of_pool",
+                    f"view '{v.name}' needs {v.offset}+{v.total_bytes} B but "
+                    f"{tier} pool '{v.pool.name}' holds {v.pool.size} B",
                     region=f"view:{v.name}",
-                    hint="raise pool size within UB capacity or shrink the tile"))
+                    hint="raise pool size within tier capacity or shrink the tile"))
         return out
 
 
@@ -234,7 +242,7 @@ class DataCopyAlignment(Rule):
     def check(self, program: Program, arch: Arch):
         out = []
         for o in program.ops:
-            if isinstance(o, Gm2Ub):
+            if isinstance(o, (Gm2Ub, Gm2L1)):
                 shape, off, dtype, pname = o.dst.shape, o.gm_off, o.dst.dtype, o.src.name
             elif isinstance(o, Ub2Gm):
                 shape, off, dtype, pname = o.src.shape, o.gm_off, o.src.dtype, o.dst.name
@@ -265,7 +273,7 @@ class GmBounds(Rule):
     def check(self, program: Program, arch: Arch):
         out = []
         for o in program.ops:
-            if isinstance(o, Gm2Ub):
+            if isinstance(o, (Gm2Ub, Gm2L1)):
                 shape, off, param = o.dst.shape, o.gm_off, o.src
             elif isinstance(o, Ub2Gm):
                 shape, off, param = o.src.shape, o.gm_off, o.dst
@@ -373,7 +381,7 @@ def _slot_accesses(program: Program):
     for o in program.ops:
         if isinstance(o, (LoopMarker, Commit, Wait)):
             continue
-        if isinstance(o, Gm2Ub):
+        if isinstance(o, (Gm2Ub, Gm2L1)):
             rec_write(o, o.dst, o.stage)
         elif isinstance(o, Ub2Gm):
             rec_read(o, o.src, o.stage)

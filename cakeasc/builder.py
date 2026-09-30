@@ -31,6 +31,7 @@ from .arch import get_arch
 from .ir import (
     Commit,
     Event,
+    Gm2L1,
     Gm2Ub,
     GmParam,
     HardBarrier,
@@ -120,9 +121,19 @@ class KernelContext:
         return p
 
     def ub_pool(self, name: str, size: int) -> UbPool:
+        """Unified Buffer pool (vector path, VECCALC)."""
+        return self._mem_pool(name, size, tier="ub")
+
+    def l1_pool(self, name: str, size: int) -> UbPool:
+        """L1 / local buffer pool (cube operand path, A1/A2 -> L0A/L0B)."""
+        return self._mem_pool(name, size, tier="l1")
+
+    def _mem_pool(self, name: str, size: int, tier: str) -> UbPool:
         if size <= 0:
-            raise IRConstructionError(f"ub pool size must be positive, got {size}", region=f"ub:{name}")
-        pool = UbPool(name, int(size))
+            raise IRConstructionError(
+                f"{tier} pool size must be positive, got {size}",
+                region=f"{tier}:{name}")
+        pool = UbPool(name, int(size), tier=tier)
         pool._ctx = self
         self.prog.ub_pools.append(pool)
         return pool
@@ -139,7 +150,6 @@ class KernelContext:
         v = UbView(name, pool, int(offset), tuple(int(d) for d in shape), dtype, int(stages))
         self.prog.ub_views.append(v)
         return v
-
     def l0c(self, name: str, shape, dtype: str = dt.FP32) -> L0cRegion:
         if dtype not in (dt.FP32,):
             raise IRConstructionError(
@@ -208,36 +218,61 @@ class KernelContext:
             )
         return self._role
 
+    @staticmethod
+    def _check_tier(view: UbView, tier: str, what: str):
+        if view.pool.tier != tier:
+            raise IRConstructionError(
+                f"{what}: view '{view.name}' lives in a {view.pool.tier.upper()} pool; "
+                f"this operation consumes {tier.upper()} tier",
+                region=f"view:{view.name}",
+                hint={"ub": "vector ops read/write Unified Buffer (m.ub_pool)",
+                      "l1": "cube operands stage through L1 (m.l1_pool): "
+                            "GM -> L1 -> L0A/L0B -> L0C"}[tier])
+
     def gm2ub(self, dst, src: GmParam, gm_off):
-        role = self._need_role("gm2ub")
+        return self._gm_copy(dst, src, gm_off, "Gm2Ub", want_tier="ub")
+
+    def gm2l1(self, dst, src: GmParam, gm_off):
+        """DataCopy GM -> L1, feeding the cube operand path."""
+        return self._gm_copy(dst, src, gm_off, "Gm2L1", want_tier="l1")
+
+    def _gm_copy(self, dst, src: GmParam, gm_off, kind: str, want_tier: str):
+        role = self._need_role(kind.lower())
         d = _slot(dst)
         if not isinstance(src, GmParam):
-            raise IRConstructionError("gm2ub src must be a GM param", region="gm2ub")
+            raise IRConstructionError(f"{kind.lower()} src must be a GM param",
+                                      region=kind.lower())
         off = tuple(int(o) for o in gm_off)
         if len(off) != len(d.view.shape) or len(off) != len(src.shape):
             raise IRConstructionError(
-                f"gm2ub offset arity {len(off)} does not match src {src.shape} / view {d.view.shape}",
-                region=f"gm2ub:{src.name}->{d.view.name}",
+                f"{kind.lower()} offset arity {len(off)} does not match "
+                f"src {src.shape} / view {d.view.shape}",
+                region=f"{kind.lower()}:{src.name}->{d.view.name}",
                 hint="provide one element offset per dimension",
             )
+        self._check_tier(d.view, want_tier, kind)
         if d.view.dtype != src.dtype:
             raise IRConstructionError(
-                f"gm2ub dtype mismatch: {src.name} is {src.dtype}, view '{d.view.name}' is {d.view.dtype}",
-                region=f"gm2ub:{src.name}->{d.view.name}",
+                f"{kind.lower()} dtype mismatch: {src.name} is {src.dtype}, "
+                f"view '{d.view.name}' is {d.view.dtype}",
+                region=f"{kind.lower()}:{src.name}->{d.view.name}",
                 hint="DataCopy performs no conversion — load into a same-dtype view, then v_cast",
             )
         if len(d.view.shape) != len(src.shape):
             raise IRConstructionError(
-                f"gm2ub rank mismatch: view '{d.view.name}' {d.view.shape} vs param {src.shape}",
-                region=f"gm2ub:{src.name}->{d.view.name}",
+                f"{kind.lower()} rank mismatch: view '{d.view.name}' {d.view.shape} "
+                f"vs param {src.shape}",
+                region=f"{kind.lower()}:{src.name}->{d.view.name}",
             )
-        self._emit(Gm2Ub("Gm2Ub", role, dst=d.view, stage=d.stage, src=src, gm_off=off))
+        op_cls = Gm2Ub if kind == "Gm2Ub" else Gm2L1
+        self._emit(op_cls(kind, role, dst=d.view, stage=d.stage, src=src, gm_off=off))
 
     def ub2gm(self, dst: GmParam, gm_off, src):
         role = self._need_role("ub2gm")
         s = _slot(src)
         if not isinstance(dst, GmParam):
             raise IRConstructionError("ub2gm dst must be a GM param", region="ub2gm")
+        self._check_tier(s.view, "ub", "ub2gm")
         off = tuple(int(o) for o in gm_off)
         if len(off) != len(s.view.shape) or len(off) != len(dst.shape):
             raise IRConstructionError(
@@ -257,6 +292,7 @@ class KernelContext:
         d = _slot(dst)
         if not isinstance(src, L0cRegion):
             raise IRConstructionError("l0c2ub src must be an l0c region", region="l0c2ub")
+        self._check_tier(d.view, "ub", "l0c2ub")
         check_same(d.view.shape, src.shape, f"l0c2ub:{src.name}->{d.view.name}")
         self._emit(L0c2Ub("L0c2Ub", role, dst=d.view, stage=d.stage, src=src))
 
@@ -267,6 +303,10 @@ class KernelContext:
         sa, sb = _slot(a), _slot(b)
         if not isinstance(acc, L0cRegion):
             raise IRConstructionError("matmul acc must be an l0c region", region="matmul")
+        # hardware contract: cube operands stage through L1 (A1/A2 -> L0A/L0B),
+        # not UB — the vector path and cube path read different memory tiers
+        self._check_tier(sa.view, "l1", "matmul")
+        self._check_tier(sb.view, "l1", "matmul")
         check_matmul(sa.view.shape, sb.view.shape, acc.shape)
         for name, s in (("a", sa), ("b", sb)):
             if s.view.dtype not in (dt.BF16, dt.FP16):
@@ -282,6 +322,10 @@ class KernelContext:
         role = self._need_role(op_name)
         d = _slot(dst)
         xs = [_slot(x) for x in x_slots]
+        # vector units read/write Unified Buffer only (L1 is cube-only)
+        self._check_tier(d.view, "ub", op_name)
+        for s in xs:
+            self._check_tier(s.view, "ub", op_name)
         return role, d, xs
 
     def v_binary(self, op: str, dst, x, y):

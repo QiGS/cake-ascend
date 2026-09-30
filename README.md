@@ -1,4 +1,4 @@
-# CAKE-Ascend
+ # CAKE-Ascend
 
 **Compiler–Agent Co-Design for Ascend Kernel Evolution** — a from-scratch
 implementation of the CAKE paper's architecture
@@ -43,11 +43,13 @@ python -m cakeasc demo kmeans_assign --iters 12
 |---------------------------|------------------------------------------------------------|
 | Cake IR schedule language | `cakeasc/ir.py`, `builder.py` — traced Python DSL          |
 | warp specialization       | role specialization: `MTE2 / CUBE / V / MTE3` agents      |
-| SMEM pool + staged views  | UB (Unified Buffer) pools + `ub.view(..., stages=)`        |
+| SMEM pool + staged views  | tiered on-chip pools: `m.ub_pool` (UB, vector path) and    |
+|                           | `m.l1_pool` (L1, cube operands A1/A2 -> L0A/L0B); tier     |
+|                           | contracts enforced at construction                         |
 | TMEM accumulator          | L0C accumulator region (`m.l0c`)                           |
 | mbarrier + phase bits     | SetFlag/WaitFlag events, FIFO per (event, stage)          |
 | pipeline (bufferNum)      | `m.pipeline(stages=)` staged slots                         |
-| TMA bulk copy             | `DataCopy` MTE2 (GM->UB) / MTE3 (UB->GM)                   |
+| TMA bulk copy             | `DataCopy` MTE2 (GM->UB, GM->L1) / MTE3 (UB->GM)           |
 | pre-compile gates         | `rules.py` + `verifier.py` (localized findings + hints)    |
 | numerical validation      | `interpreter.py` dataflow simulator + workload oracles     |
 | CUPTI span                | deterministic timing trace (cycles) from the simulator     |
@@ -63,9 +65,11 @@ def kern(m):
     A = m.gm_param("A", "bf16", (M, K))
     B = m.gm_param("B", "bf16", (K, N))
     C = m.gm_param("C", "fp32", (M, N))
-    ub = m.ub_pool("ub", 232 * 1024)
-    bufA = ub.view("A", 0, (BM, BK), "bf16", stages=2)      # staged double buffer
-    bufB = ub.view("B", off, (BK, BN), "bf16", stages=2)
+    l1 = m.l1_pool("l1", 512 * 1024)                        # cube operand tier
+    ub = m.ub_pool("ub", 232 * 1024)                         # vector tier
+    bufA = l1.view("A", 0, (BM, BK), "bf16", stages=2)       # staged A1 buffer
+    bufB = l1.view("B", off, (BK, BN), "bf16", stages=2)     # staged A2 buffer
+    bufC = ub.view("C", off2, (BM, BN), "fp32", 1)           # UB epilogue
     acc  = m.l0c("acc", (BM, BN))                            # fp32 L0C accumulator
     ld, cu, st = m.role("ld", "MTE2"), m.role("cu", "CUBE"), m.role("st", "MTE3")
     pipe = m.pipeline("main", stages=2)
@@ -75,14 +79,16 @@ def kern(m):
         for t in m.tile_loop("t", TILES):      # unrolls at trace time
             s = t % 2
             if t >= 2: m.wait(a_free, stage=s)
-            m.gm2ub(bufA[s], A, (row0, col0)); m.commit(a_rdy, stage=s)
+            m.gm2l1(bufA[s], A, (row0, col0)); m.commit(a_rdy, stage=s)
     ...
 ```
 
 Schedules are ordinary Python traced against the builder: loops unroll, so
 every op is concrete and statically analyzable (paper P4/P5), while lowering
-derives the mechanical parts (UB offsets, bufferNum, HardEvent ids, loop
-structure) from the declarations.
+derives the mechanical parts (UB/L1 offsets, bufferNum, HardEvent ids, loop
+structure) from the declarations. Memory tiers are a hard IR contract —
+cube operands stage through L1 (`gm2l1`, A1/A2 -> L0A/L0B), the vector
+units read UB only, and data needed by both paths is loaded twice.
 
 ## CLI
 
